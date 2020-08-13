@@ -1,0 +1,10 @@
+# Configuration file for shapenet cars training (see paper section 4, paragraph 4)
+# Datasets can be downloaded here: https://drive.google.com/drive/folders/1OkYgeRcIcLOFu1ft5mRODWNQaPJ0ps90
+
+data_root: /projects/katefgroup/datasets/clevr_vqa/raw/npys/single_obj_large_480_all
+val_root: /projects/katefgroup/datasets/clevr_vqa/raw/npys/single_obj_large_480_all
+logging_root: ./logs/clevr_large
+img_sidelengths: 64
+batch_size_per_img_sidelength: 64 # This is for a GPU with 48 GB of memory. Adapt accordingly for your GPU memory.
+max_steps_per_img_sidelength: 500000000
+pydisco_exp: True

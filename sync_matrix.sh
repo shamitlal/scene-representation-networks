@@ -1,0 +1,1 @@
+rsync -av ./ cmu:/home/shamitl/projects/scene-representation-network

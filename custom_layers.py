@@ -7,6 +7,8 @@ from pytorch_prototyping import pytorch_prototyping
 import torch
 from torch import nn
 
+import ipdb
+st = ipdb.set_trace
 
 def init_recurrent_weights(self):
     for m in self.modules():
@@ -96,6 +98,7 @@ class Raymarcher(nn.Module):
                                                          initial_depth,
                                                          intrinsics=intrinsics,
                                                          cam2world=cam2world)
+        # st()
 
         world_coords = [init_world_coords]
         depths = [initial_depth]
@@ -122,7 +125,7 @@ class Raymarcher(nn.Module):
                       (step, depths[-1].min().detach().cpu().numpy(), depths[-1].max().detach().cpu().numpy()))
 
             depths.append(depth)
-
+        # st()
         if not self.counter % 100:
             # Write tensorboard summary for each step of ray-marcher.
             drawing_depths = torch.stack(depths, dim=0)[:, 0, :, :]

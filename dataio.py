@@ -4,7 +4,9 @@ import numpy as np
 from glob import glob
 import data_util
 import util
-
+import pickle
+import ipdb 
+st = ipdb.set_trace
 
 def pick(list, item_idcs):
     if not list:
@@ -102,6 +104,7 @@ class SceneClassDataset(torch.utils.data.Dataset):
 
         self.samples_per_instance = samples_per_instance
         self.instance_dirs = sorted(glob(os.path.join(root_dir, "*/")))
+        # st()
 
         assert (len(self.instance_dirs) != 0), "No objects in the data directory"
 
@@ -116,6 +119,7 @@ class SceneClassDataset(torch.utils.data.Dataset):
                               for idx, dir in enumerate(self.instance_dirs)]
 
         self.num_per_instance_observations = [len(obj) for obj in self.all_instances]
+        # st()
         self.num_instances = len(self.all_instances)
 
     def set_img_sidelength(self, new_img_sidelength):
@@ -170,3 +174,94 @@ class SceneClassDataset(torch.utils.data.Dataset):
         ground_truth = [{'rgb':ray_bundle['rgb']} for ray_bundle in observations]
 
         return observations, ground_truth
+
+
+import torch.nn.functional as F
+import numpy as np
+class PydiscoDataset(torch.utils.data.Dataset):
+
+    def __init__(self,
+                 root_dir,
+                 img_sidelength=None,
+                 max_num_instances=-1,
+                 max_observations_per_instance=-1,
+                 specific_observation_idcs=None,  # For few-shot case: Can pick specific observations only
+                 samples_per_instance=2):
+
+        self.samples_per_instance = samples_per_instance
+        self.img_sidelength = img_sidelength
+        self.root_dir = root_dir
+        self.instances = [os.path.join(root_dir,p) for p in os.listdir(root_dir) if p.endswith('.p')]
+        self.num_instances = len(self.instances)
+
+    def __len__(self):
+        return len(self.instances)
+
+    
+    def __getitem__(self, idx):
+        path = self.instances[idx]
+        
+        p = pickle.load(open(path, 'rb'))
+        
+        rgb = torch.tensor(2.*(p['rgb_camXs_raw']/255.) - 1).cuda()
+        rgb = rgb.permute(0,3,1,2)
+        _,_,H_orig,W_orig = rgb.shape
+        rgb = F.interpolate(rgb, size=self.img_sidelength)
+
+        num_views = rgb.shape[0]
+        rand_view = np.random.randint(num_views)
+
+        # C, H, W
+        rgb = rgb[rand_view]
+        rgb = rgb.reshape(rgb.shape[0], -1).permute(1,0)
+
+        extr = torch.tensor(p['origin_T_camXs_raw'])[rand_view].cuda()
+        intr = torch.tensor(p['pix_T_cams_raw']).cuda()
+        intr = scale_intrinsics(intr, 1.*self.img_sidelength/W_orig, 1.*self.img_sidelength/H_orig)
+        intr = intr[rand_view]
+
+        uv = np.mgrid[0:self.img_sidelength, 0:self.img_sidelength].astype(np.int32)
+        uv = torch.from_numpy(np.flip(uv, axis=0).copy()).long()
+        uv = uv.reshape(2, -1).transpose(1, 0)
+
+        sample = {
+            "instance_idx": torch.tensor([idx]),
+            "rgb": rgb.float(),
+            "pose": extr.float(),
+            "uv": uv,
+            "param": torch.zeros(1),  # currently setting to 0 because its 0 when i run the code with car.yml
+            "intrinsics": intr.float()
+        }
+        ground_truth={}
+        ground_truth['rgb'] = sample['rgb']
+        return sample, ground_truth
+
+
+
+def scale_intrinsics(K, sx, sy):
+    fx, fy, x0, y0 = split_intrinsics(K)
+    fx = fx*sx
+    fy = fy*sy
+    x0 = x0*sx
+    y0 = y0*sy
+    K = pack_intrinsics(fx, fy, x0, y0)
+    return K
+
+def split_intrinsics(K):
+    # K is B x 3 x 3 or B x 4 x 4
+    fx = K[:,0,0]
+    fy = K[:,1,1]
+    x0 = K[:,0,2]
+    y0 = K[:,1,2]
+    return fx, fy, x0, y0
+
+def pack_intrinsics(fx, fy, x0, y0):
+    B = list(fx.shape)[0]
+    K = torch.zeros(B, 4, 4, dtype=torch.float32, device=torch.device('cuda'))
+    K[:,0,0] = fx
+    K[:,1,1] = fy
+    K[:,0,2] = x0
+    K[:,1,2] = y0
+    K[:,2,2] = 1.0
+    K[:,3,3] = 1.0
+    return K

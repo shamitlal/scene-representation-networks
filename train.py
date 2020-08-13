@@ -9,7 +9,8 @@ import dataio
 from torch.utils.data import DataLoader
 from srns import *
 import util
-
+import ipdb 
+st = ipdb.set_trace
 p = configargparse.ArgumentParser()
 p.add('-c', '--config_filepath', required=False, is_config_file=True, help='Path to config file.')
 
@@ -41,7 +42,7 @@ p.add_argument('--kl_weight', type=float, default=1,
 p.add_argument('--reg_weight', type=float, default=1e-3,
                help='Weight for depth regularization term (lambda_depth in paper).')
 
-p.add_argument('--steps_til_ckpt', type=int, default=10000,
+p.add_argument('--steps_til_ckpt', type=int, default=100,
                help='Number of iterations until checkpoint is saved.')
 p.add_argument('--steps_til_val', type=int, default=1000,
                help='Number of iterations until validation set is run.')
@@ -83,7 +84,8 @@ p.add_argument('--use_unet_renderer', action='store_true',
                help='Whether to use a DeepVoxels-style unet as rendering network or a per-pixel 1x1 convnet')
 p.add_argument('--embedding_size', type=int, default=256,
                help='Dimensionality of latent embedding.')
-
+p.add_argument('--pydisco_exp', action='store_true', default=False,
+               help='Pydisco experiment')
 opt = p.parse_args()
 
 
@@ -98,12 +100,20 @@ def train():
     batch_size_per_sidelength = util.parse_comma_separated_integers(opt.batch_size_per_img_sidelength)
     max_steps_per_sidelength = util.parse_comma_separated_integers(opt.max_steps_per_img_sidelength)
 
-    train_dataset = dataio.SceneClassDataset(root_dir=opt.data_root,
-                                             max_num_instances=opt.max_num_instances_train,
-                                             max_observations_per_instance=opt.max_num_observations_train,
-                                             img_sidelength=img_sidelengths[0],
-                                             specific_observation_idcs=specific_observation_idcs,
-                                             samples_per_instance=1)
+    if not opt.pydisco_exp:
+        train_dataset = dataio.SceneClassDataset(root_dir=opt.data_root,
+                                                max_num_instances=opt.max_num_instances_train,
+                                                max_observations_per_instance=opt.max_num_observations_train,
+                                                img_sidelength=img_sidelengths[0],
+                                                specific_observation_idcs=specific_observation_idcs,
+                                                samples_per_instance=1)
+    else:
+        train_dataset = dataio.PydiscoDataset(root_dir=opt.data_root,
+                                            max_num_instances=opt.max_num_instances_train,
+                                            max_observations_per_instance=opt.max_num_observations_train,
+                                            img_sidelength=img_sidelengths[0],
+                                            specific_observation_idcs=specific_observation_idcs,
+                                            samples_per_instance=1)
 
     assert (len(img_sidelengths) == len(batch_size_per_sidelength)), \
         "Different number of image sidelengths passed than batch sizes."
@@ -113,17 +123,30 @@ def train():
     if not opt.no_validation:
         assert (opt.val_root is not None), "No validation directory passed."
 
-        val_dataset = dataio.SceneClassDataset(root_dir=opt.val_root,
+        if not opt.pydisco_exp:
+            val_dataset = dataio.SceneClassDataset(root_dir=opt.val_root,
+                                                max_num_instances=opt.max_num_instances_val,
+                                                max_observations_per_instance=opt.max_num_observations_val,
+                                                img_sidelength=img_sidelengths[0],
+                                                samples_per_instance=1)
+        
+            collate_fn = val_dataset.collate_fn
+            val_dataloader = DataLoader(val_dataset,
+                                        batch_size=2,
+                                        shuffle=False,
+                                        drop_last=True,
+                                        collate_fn=val_dataset.collate_fn)
+        
+        else:
+            val_dataset = dataio.PydiscoDataset(root_dir=opt.val_root,
                                                max_num_instances=opt.max_num_instances_val,
                                                max_observations_per_instance=opt.max_num_observations_val,
                                                img_sidelength=img_sidelengths[0],
                                                samples_per_instance=1)
-        collate_fn = val_dataset.collate_fn
-        val_dataloader = DataLoader(val_dataset,
-                                    batch_size=2,
-                                    shuffle=False,
-                                    drop_last=True,
-                                    collate_fn=val_dataset.collate_fn)
+            val_dataloader = DataLoader(val_dataset,
+                                        batch_size=2,
+                                        shuffle=False,
+                                        drop_last=True)
 
     model = SRNsModel(num_instances=train_dataset.num_instances,
                       latent_dim=opt.embedding_size,
@@ -172,21 +195,34 @@ def train():
         print("\n" + "#" * 10)
         print("Training with sidelength %d for %d steps with batch size %d" % (img_sidelength, max_steps, batch_size))
         print("#" * 10 + "\n")
-        train_dataset.set_img_sidelength(img_sidelength)
+        
 
         # Need to instantiate DataLoader every time to set new batch size.
-        train_dataloader = DataLoader(train_dataset,
+        if not opt.pydisco_exp:
+            train_dataset.set_img_sidelength(img_sidelength)
+            train_dataloader = DataLoader(train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        drop_last=True,
+                                        collate_fn=train_dataset.collate_fn,
+                                        pin_memory=opt.preload)
+        else:
+            train_dataloader = DataLoader(train_dataset,
                                       batch_size=batch_size,
                                       shuffle=True,
                                       drop_last=True,
-                                      collate_fn=train_dataset.collate_fn,
                                       pin_memory=opt.preload)
 
         cum_max_steps += max_steps
-
+        # st()
         # Loops over epochs.
         while True:
             for model_input, ground_truth in train_dataloader:
+                if opt.pydisco_exp:
+                    model_input['instance_idx'] = model_input['instance_idx'].reshape(-1)
+                
+                # ground_truth = None
+                # st()
                 model_outputs = model(model_input)
 
                 optimizer.zero_grad()
@@ -225,6 +261,8 @@ def train():
                         ssims = []
                         dist_losses = []
                         for model_input, ground_truth in val_dataloader:
+                            if opt.pydisco_exp:
+                                model_input['instance_idx'] = model_input['instance_idx'].reshape(-1)
                             model_outputs = model(model_input)
 
                             dist_loss = model.get_image_loss(model_outputs, ground_truth).cpu().numpy()

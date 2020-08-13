@@ -12,7 +12,8 @@ from pytorch_prototyping import pytorch_prototyping
 import custom_layers
 import geometry
 import hyperlayers
-
+import ipdb 
+st = ipdb.set_trace
 
 class SRNsModel(nn.Module):
     def __init__(self,
@@ -42,6 +43,7 @@ class SRNsModel(nn.Module):
                                                    out_features=self.num_hidden_units_phi)
         else:
             # Auto-decoder: each scene instance gets its own code vector z
+            # st()
             self.latent_codes = nn.Embedding(num_instances, latent_dim).cuda()
             nn.init.normal_(self.latent_codes.weight, mean=0, std=0.01)
 
